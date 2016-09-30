@@ -5,7 +5,7 @@ from keras import initializations, activations
 from keras.layers import Input, Dense, core
 from keras.models import Model
 from keras.layers.wrappers import TimeDistributed
-
+import theano
 
 class VladLayer(Layer):
 	def __init__(self, n_centers, w_init = 'glorot_uniform', b_init = 'zero', c_init = 'zero',  **kwargs):
@@ -25,43 +25,58 @@ class VladLayer(Layer):
 
 		self.w = self.w_init((self.d, self.n_centers), name = '{}_w'.format(self.name))
 		self.b = self.b_init((self.n_centers, ), name = '{}_b'.format(self.name))
-		self.c = self.c_init((self.d, self.n_centers), name = '{}_c'.format(self.name))
-		
+		self.c = self.c_init((self.n_centers, self.d), name = '{}_c'.format(self.name))
+
+		self.zero = K.zeros((1,))
+	
 		self.trainable_weights = [self.w, self.b, self.c]
 
 		self.softmax = activations.get('softmax')
+	
+	def compute_mask(self, input, input_mask = None):
+		return None
+
 
 	def call(self, x, mask = None):
-		print mask
 		if mask is not None:
 			print 'foo'
-			#mask = K.repeat_elements(K.expand_dims(mask, 2), self.n, axis = 2)
-			#mask = K.reshape(mask, (-1, self.l * self.n))		
+			mask = K.any(mask, axis = -1)
+			mask = K.repeat_elements(K.expand_dims(mask, 2), self.n, axis = 2)
+			mask = K.reshape(mask, (-1, self.l * self.n))
+			mask = K.expand_dims(mask, 2)
 
 		x = K.reshape(x, (-1, self.l * self.n, self.d))	
+		a = self.softmax(K.dot(x, self.w) + self.b)
+		if mask is not None:
+			a = K.switch(mask, a, 0)
+		a = a.dimshuffle((2, 0, 1))
+		a = K.expand_dims(a, 3)
+		
+		bias = K.expand_dims(self.c, 1)
+		bias = K.expand_dims(bias, 1)
+		x_bar = K.expand_dims(x, 0)
 
-		a = self.softmax(K.dot(x, self.w))
-		a = K.repeat_elements(K.expand_dims(a, 2), self.d, axis = 2)
-		
-		stack_x = K.repeat_elements(K.expand_dims(x, 3), self.n_centers, axis = 3)
-		bias = K.repeat_elements(K.expand_dims(self.c, 0), self.n * self.l , axis = 0)
-		diff = stack_x - bias
+		def _step(a, c, x):
+			output = K.sum(a * (x - c), axis = 1)
+			return output
 			
-		ret = a * diff
-		ret = K.sum(ret, axis = 1)
-		
-				
+		ret, _ = theano.scan(fn = _step, 
+					outputs_info = None, 
+					sequences = [a, bias], 
+					non_sequences = x)
+
+		ret = ret.dimshuffle((1, 0, 2))
 			
-#		return ret
-		return mask
+		return ret
+#		return mask
 
 		
 
 	def get_output_shape_for(self, input_shape):
-#		return (input_shape[0], self.n_centers, self.d)
-#		return (input_shape[0], self.n, self.d, self.n_centers)
+		return (input_shape[0], self.d, self.n_centers)
+#		return (self.n_centers, input_shape[0], self.l * self.d)
 #		return (input_shape[0], self.l * self.n, self.d, self.n_centers)
-		return (input_shape[0], self.l * self.n)
+#		return (input_shape[0], self.l * self.n)
 
 if __name__ == '__main__':
 	data = np.random.random((3, 5, 15, 25))

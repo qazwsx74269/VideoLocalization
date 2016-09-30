@@ -23,6 +23,7 @@ class Memory:
 
 class VideoModel:
 	def __init__(self, height = 224, width = 224, n_channels = 3, max_window_size = 10, step = 10, n_centers = 256, 
+			dim_full = 256,
 			pretrain = True, spp_struct = ((7, 7), (3, 3),  (2, 2), (1, 1))):
 		print 'model'
 		self.height = height
@@ -31,6 +32,7 @@ class VideoModel:
 		self.max_window_size = max_window_size
 		self.step = step
 		self.n_centers = n_centers
+		self.dim_full = dim_full
 
 		if pretrain:
 			self.height = 224
@@ -80,39 +82,45 @@ class VideoModel:
 		
 	def constructNetwork(self):
 		input = Input(shape = (self.max_window_size, self.n_channels, self.height, self.width))
-		h = Masking()(input)
+		h = Masking()(input)		
+
+		#last conv layer of Resdual Net
 		res_net = ResNet50(weights='imagenet', include_top = False)
 		res_net_output = res_net.get_layer('bn5c_branch2c').output
 		res_net = Model(input = res_net.input, output = res_net_output)
 
+		#feed each frame into resnet
 		res_net_time = TimeDistributed(res_net)
-		h = res_net_time(h)
+		h_res = res_net_time(h)
 		
-		#model = Model(input = input, output = h)
-		#data = np.random.random((2, 10, 3, 224, 224))
-		#data = model.predict(data)
-		h = self.spp(h, res_net_time.output_shape)
-		
+		#spp pooling
+		h_spp = self.spp(h_res, res_net_time.output_shape)
 
-		#layer_permute = Permute((1, 3, 4, 2))
-		#h = layer_permute(h)
-		#output_shape = layer_permute.output_shape
-		#print output_shape
+		#vlad encoding
+		h_vlad = VladLayer(n_centers = self.n_centers)(h_spp)
+		#h_vlad = Reshape((self.n_centers * res_net_time.output_shape[2],))(h_vlad)
 		
+		#action classifier
+		#h_dense = Dense(output_dim = self.dim_full)(h_vlad)
+		#prediction = Dense(output_dim = 5, activation = 'softmax')(h_dense)
+		self.model = Model(input = input, output = h_vlad)
+		#self.model.compile(optimizer='rmsprop', loss='categorical_crossentropy', metrics=['accuracy'])
 
-		#h = Reshape((output_shape[1] * output_shape[2] * output_shape[3], output_shape[4]))(h)
-		h = VladLayer(n_centers = self.n_centers)(h)
-		#h = Reshape((self.n_centers * output_shape[4],))(h)
-		
-		data = np.random.random((5, 10, 3, 224, 224))		
+		#debug		
+		data = np.random.random((5, self.max_window_size, 3, 224, 224))		
 		data[0, 9, :, :, :] = 0
-		self.model = Model(input = input, output = h)
 		data = self.model.predict(data)
-		print data
-
+		
+		print data.shape
+	
+		
 if __name__ == '__main__':
 	model = VideoModel()
 	model.constructNetwork()
+
+#	data = np.random.random((5000, 3, 224, 224))	
+#	model = ResNet50(weights = 'imagenet', include_top = False)
+#	model.predict(data)
 		
 	
 #	res_net = ResNet50(weights = 'imagenet', include_top = False)
